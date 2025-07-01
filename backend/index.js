@@ -1,15 +1,17 @@
 const express = require("express");
 const cors = require("cors");
 const WebSocket = require("ws");
-const path = require("path");
+const http = require("http");
+const axios = require("axios");
 const apiRoutes = require("./routes/api.routes");
 require("dotenv").config();
+
 const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 5001;
 
-// Middleware
-const allowedOrigins = [process.env.FE1];
-
+// CORS for frontend hosted on Vercel
+const allowedOrigins = [process.env.FE1]; // e.g. https://cryptopulse.vercel.app
 app.use(
   cors({
     origin: function (origin, callback) {
@@ -23,8 +25,8 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "build")));
 
 // Store for price history and current prices
 const priceHistory = new Map();
@@ -42,93 +44,61 @@ const symbols = [
   "MATICUSDT",
 ];
 
-// Initialize WebSocket connection to Binance
-let binanceWs;
-const connectToBinance = () => {
-  const streamUrl = `wss://stream.binance.com:9443/ws/${symbols
-    .map((s) => s.toLowerCase() + "@ticker")
-    .join("/")}`;
+// REST polling fallback instead of WebSocket (Render blocks wss)
+const fetchBinancePrices = async () => {
+  try {
+    const { data } = await axios.get(
+      "https://api.binance.com/api/v3/ticker/24hr"
+    );
+    const filtered = data.filter((ticker) => symbols.includes(ticker.symbol));
 
-  binanceWs = new WebSocket(streamUrl);
+    filtered.forEach((ticker) => {
+      const { symbol, lastPrice, priceChangePercent, volume } = ticker;
+      const price = parseFloat(lastPrice);
+      const change = parseFloat(priceChangePercent);
+      const vol = parseFloat(volume);
 
-  binanceWs.on("open", () => {
-    console.log("Connected to Binance WebSocket");
-  });
-
-  binanceWs.on("message", (data) => {
-    try {
-      const ticker = JSON.parse(data);
-      const symbol = ticker.s;
-      const price = parseFloat(ticker.c);
-      const change = parseFloat(ticker.P);
-      const volume = parseFloat(ticker.v);
-
-      // Update current prices
       currentPrices.set(symbol, {
         symbol,
         price,
         change,
-        volume,
+        volume: vol,
         timestamp: Date.now(),
       });
 
-      // Store price history (keep last 24 hours worth of data)
-      if (!priceHistory.has(symbol)) {
-        priceHistory.set(symbol, []);
-      }
-
+      // Update price history
+      if (!priceHistory.has(symbol)) priceHistory.set(symbol, []);
       const history = priceHistory.get(symbol);
-      history.push({
-        price,
-        timestamp: Date.now(),
-      });
+      history.push({ price, timestamp: Date.now() });
+      if (history.length > 1440) history.shift(); // keep 24h history (1/min)
 
-      // Keep only last 24 hours (assuming 1 update per minute = 1440 points)
-      if (history.length > 1440) {
-        history.shift();
-      }
-
-      // Broadcast to all connected clients
+      // Broadcast to WebSocket clients
       broadcastToClients({
         type: "price_update",
-        data: {
-          symbol,
-          price,
-          change,
-          volume,
-          timestamp: Date.now(),
-        },
+        data: currentPrices.get(symbol),
       });
-    } catch (error) {
-      console.error("Error parsing WebSocket data:", error);
-    }
-  });
-
-  binanceWs.on("error", (error) => {
-    console.error("Binance WebSocket error:", error);
-  });
-
-  binanceWs.on("close", () => {
-    console.log("Binance WebSocket closed. Reconnecting...");
-    setTimeout(connectToBinance, 5000);
-  });
+    });
+  } catch (error) {
+    console.error("Error fetching Binance prices:", error.message);
+  }
 };
-const server = require("http").createServer(app);
-const wss = new WebSocket.Server({ server });
-// WebSocket server for clients
 
+// Start polling Binance REST API every 10s
+setInterval(fetchBinancePrices, 10000);
+
+// WebSocket setup for broadcasting
+const wss = new WebSocket.Server({ server });
 const clients = new Set();
 
 wss.on("connection", (ws) => {
-  console.log("Client connected");
+  console.log("Client connected via WebSocket");
   clients.add(ws);
 
-  // Send current prices to new client
-  const currentData = Array.from(currentPrices.values());
+  // Send current price snapshot
   ws.send(
     JSON.stringify({
       type: "initial_data",
-      data: currentData,
+      data: Array.from(currentPrices.values()),
     })
   );
 
@@ -138,43 +108,32 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("error", (error) => {
-    console.error("Client WebSocket error:", error);
+    console.error("WebSocket error:", error);
     clients.delete(ws);
   });
 });
 
 // Broadcast function
 const broadcastToClients = (message) => {
-  const messageStr = JSON.stringify(message);
+  const msg = JSON.stringify(message);
   clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(messageStr);
+      client.send(msg);
     }
   });
 };
 
-//Endpoints
+// API Routes
 app.use("/api", apiRoutes);
 
-// Serve React app
-app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "build/index.html"));
-});
-
-// Start Express + WebSocket together
+// Start server
 server.listen(PORT, () => {
   console.log(`Server running with WebSocket on port ${PORT}`);
 });
 
-// Connect to Binance WebSocket
-connectToBinance();
-
 // Graceful shutdown
 process.on("SIGINT", () => {
   console.log("Shutting down gracefully...");
-  if (binanceWs) {
-    binanceWs.close();
-  }
   wss.close();
-  process.exit(0);
+  server.close(() => process.exit(0));
 });
