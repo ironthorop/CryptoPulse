@@ -3,7 +3,7 @@ const cors = require("cors");
 const WebSocket = require("ws");
 const http = require("http");
 const axios = require("axios");
-const apiRoutes = require("./routes/api.routes");
+const apiRoutes = require("./routes/api.routes")(currentPrices, priceHistory);
 require("dotenv").config();
 
 const app = express();
