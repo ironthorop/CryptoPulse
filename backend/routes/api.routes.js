@@ -1,29 +1,23 @@
-// routes/api.routes.js
 const express = require("express");
 const axios = require("axios");
 
 module.exports = (currentPrices, priceHistory) => {
   const router = express.Router();
 
-  // Get current prices
   router.get("/prices", (req, res) => {
-    const prices = Array.from(currentPrices.values());
-    res.json(prices);
+    res.json(Array.from(currentPrices.values()));
   });
 
-  // Get price history for a specific symbol
   router.get("/history/:symbol", (req, res) => {
     const symbol = req.params.symbol.toUpperCase();
-    const history = priceHistory.get(symbol) || [];
-    res.json(history);
+    res.json(priceHistory.get(symbol) || []);
   });
 
-  // Get 24h Kline data from Binance
   router.get("/klines/:symbol", async (req, res) => {
     try {
       const symbol = req.params.symbol.toUpperCase();
       const response = await axios.get(
-        `https://api.binance.com/api/v3/klines`,
+        "https://api.binance.com/api/v3/klines",
         {
           params: {
             symbol,
@@ -43,13 +37,12 @@ module.exports = (currentPrices, priceHistory) => {
       }));
 
       res.json(klines);
-    } catch (error) {
-      console.error("Error fetching klines:", error.message);
-      res.status(500).json({ error: "Failed to fetch price history" });
+    } catch (err) {
+      console.error("Error fetching klines:", err.message);
+      res.status(500).json({ error: "Failed to fetch Binance data" });
     }
   });
 
-  // Generate JSON report
   router.get("/report", (req, res) => {
     const prices = Array.from(currentPrices.values());
     const report = {

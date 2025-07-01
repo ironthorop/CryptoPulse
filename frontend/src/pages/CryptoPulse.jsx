@@ -3,6 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Star, Download, Sun, Moon, TrendingUp, TrendingDown } from 'lucide-react';
 const API_BASE_URI = import.meta.env.VITE_API_BASE_URI;
 
+
 const CryptoPulse = () => {
   const [prices, setPrices] = useState([]);
   const [selectedCrypto, setSelectedCrypto] = useState('BTCUSDT');
@@ -21,7 +22,7 @@ const CryptoPulse = () => {
   // WebSocket connection
   useEffect(() => {
     const connectWebSocket = () => {
-      const ws = new WebSocket('ws://localhost:8080');
+      const ws = new WebSocket(import.meta.env.VITE_WS_URL);
       wsRef.current = ws;
 
       ws.onopen = () => {
